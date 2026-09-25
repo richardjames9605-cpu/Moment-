@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pixel Kick: Retro Penalty & Free Kick</title>
+    <title>Pixel Kick 3D: Penalty & Free Kick Challenge</title>
     <style>
         * {
             box-sizing: border-box;
@@ -13,80 +13,85 @@
             -webkit-user-select: none;
         }
         body {
-            background-color: #1a1a24;
+            background-color: #050508;
             color: #fff;
             font-family: 'Courier New', Courier, monospace;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
             overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
         }
         #game-container {
             position: relative;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
-            border: 4px solid #fff;
-            border-radius: 8px;
+            width: 100vw;
+            height: 100vh;
+            max-width: 600px;
+            max-height: 900px;
+            box-shadow: 0 0 30px rgba(0,0,0,0.9);
             overflow: hidden;
             background: #000;
         }
-        canvas {
-            display: block;
-            image-rendering: pixelated;
-            image-rendering: crisp-edges;
-            cursor: crosshair;
-        }
         #ui-overlay {
             position: absolute;
-            top: 10px;
-            left: 10px;
-            right: 10px;
+            top: 15px;
+            left: 15px;
+            right: 15px;
             display: flex;
             justify-content: space-between;
             font-size: 16px;
             font-weight: bold;
             text-shadow: 2px 2px 0px #000;
             pointer-events: none;
+            z-index: 10;
         }
         .stat-box {
-            background: rgba(0,0,0,0.6);
-            padding: 6px 12px;
+            background: rgba(0,0,0,0.65);
+            padding: 8px 14px;
             border: 2px solid #fff;
-            border-radius: 4px;
+            border-radius: 6px;
         }
         #message-overlay {
             position: absolute;
             top: 40%;
             left: 50%;
             transform: translate(-50%, -50%);
-            font-size: 32px;
+            font-size: 36px;
             font-weight: bold;
             text-align: center;
             text-shadow: 3px 3px 0px #000;
             pointer-events: none;
             opacity: 0;
             transition: opacity 0.3s ease;
+            z-index: 10;
         }
         #controls-hint {
             position: absolute;
-            bottom: 15px;
+            bottom: 20px;
             left: 50%;
             transform: translateX(-50%);
-            background: rgba(0,0,0,0.7);
-            padding: 6px 16px;
+            background: rgba(0,0,0,0.75);
+            padding: 8px 18px;
             border-radius: 20px;
             font-size: 12px;
             border: 1px solid #aaa;
             pointer-events: none;
             text-align: center;
+            z-index: 10;
+        }
+        #canvas-container {
+            width: 100%;
+            height: 100%;
         }
     </style>
+
+    <!-- Three.js Library for 3D Graphics -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
 
 <div id="game-container">
-    <canvas id="gameCanvas" width="480" height="640"></canvas>
+    <div id="canvas-container"></div>
     
     <div id="ui-overlay">
         <div class="stat-box">SCORE: <span id="score-val" style="color: #ff0;">0</span></div>
@@ -95,295 +100,363 @@
     </div>
 
     <div id="message-overlay">GOAL!</div>
-    <div id="controls-hint">DRAG & RELEASE TO SHOOT (SWIPE CURVED TO BEND IT)</div>
+    <div id="controls-hint">SWIPE UP TO SHOOT (CURVE YOUR SWIPE TO BEND IT)</div>
 </div>
 
 <script>
-const canvas = document.getElementById('gameCanvas');
-const ctx = canvas.getContext('2d');
-
-// --- GAME STATE ---
+// --- GAME STATE VARIABLES ---
 let level = 1;
 let score = 0;
 let lives = 3;
 let gameState = 'AIMING'; // AIMING, IN_FLIGHT, RESULT, GAME_OVER
-let messageTimer = 0;
-let mode = 'PENALTY'; // PENALTY or FREEKICK
 
-// Stadium Elements
-const goal = { x: 100, y: 120, w: 280, h: 100, depth: 30 };
-const ballStart = { x: 240, y: 540 };
+// Three.js Scene Setup
+let scene, camera, renderer;
+let ballMesh, keeperMesh, goalFrame, stadiumGroup;
+let wallDefenders = [];
 
-// Dynamic Objects
+// Physics State
 let ball = {
-    x: ballStart.x,
-    y: ballStart.y,
-    z: 0, // Height off ground
-    vx: 0,
-    vy: 0,
-    vz: 0,
-    radius: 10,
-    spin: 0
+    pos: new THREE.Vector3(0, 0.4, 12),
+    vel: new THREE.Vector3(0, 0, 0),
+    spin: 0,
+    radius: 0.4
 };
 
 let keeper = {
-    x: 240,
-    y: goal.y + goal.h,
-    w: 36,
-    h: 48,
-    vx: 0,
-    state: 'IDLE', // IDLE, DIVING
-    targetX: 240,
-    targetY: goal.y + goal.h
+    pos: new THREE.Vector3(0, 1, 0),
+    targetX: 0,
+    velX: 0,
+    state: 'IDLE'
 };
 
-let wallDefenders = [];
-let wind = { x: 0, y: 0 };
+let wind = 0;
+let dragPoints = [];
+let isDragging = false;
 
-// Touch / Mouse Tracking for Swipe
-let dragStart = null;
-let dragCurrent = null;
-let pathPoints = [];
+// Initialize 3D Engine
+function init3D() {
+    const container = document.getElementById('canvas-container');
 
-// --- INITIALIZATION ---
-function initLevel() {
-    ball.x = ballStart.x;
-    ball.y = ballStart.y;
-    ball.z = 0;
-    ball.vx = 0;
-    ball.vy = 0;
-    ball.vz = 0;
-    ball.spin = 0;
+    // 1. Scene
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a0a16);
 
-    keeper.x = 240;
-    keeper.y = goal.y + goal.h;
-    keeper.vx = 0;
-    keeper.state = 'IDLE';
+    // 2. Camera (3D Third-Person Perspective behind the ball)
+    camera = new THREE.PerspectiveCamera(55, container.clientWidth / container.clientHeight, 0.1, 1000);
+    camera.position.set(0, 2.5, 16);
+    camera.lookAt(0, 1.5, 0);
 
-    // Set Mode and Setup Mechanics based on Level
-    if (level >= 3) {
-        mode = 'FREEKICK';
-        setupWall();
-    } else {
-        mode = 'PENALTY';
-        wallDefenders = [];
+    // 3. Renderer (Pixelated Voxel aesthetic styling)
+    renderer = new THREE.WebGLRenderer({ antialias: false });
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(renderer.domElement);
+
+    // 4. Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(10, 20, 15);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 1024;
+    dirLight.shadow.mapSize.height = 1024;
+    scene.add(dirLight);
+
+    // Build 3D Pixel World
+    buildPitch();
+    buildGoal();
+    buildGalleryCrowd();
+    createBall();
+    createKeeper();
+
+    // Event Listeners for Touch/Mouse Swipe
+    const el = renderer.domElement;
+    el.addEventListener('mousedown', onDragStart);
+    el.addEventListener('mousemove', onDragMove);
+    el.addEventListener('mouseup', onDragEnd);
+
+    el.addEventListener('touchstart', (e) => { e.preventDefault(); onDragStart(e.touches[0]); });
+    el.addEventListener('touchmove', (e) => { e.preventDefault(); onDragMove(e.touches[0]); });
+    el.addEventListener('touchend', (e) => { e.preventDefault(); onDragEnd(); });
+
+    window.addEventListener('resize', onWindowResize);
+
+    initLevel();
+    animate();
+}
+
+// --- 3D ENVIRONMENT CREATION (VOXEL PIXEL STYLE) ---
+function createBlock(w, h, d, color) {
+    const geo = new THREE.BoxGeometry(w, h, d);
+    const mat = new THREE.MeshLambertMaterial({ color: color });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    return mesh;
+}
+
+function buildPitch() {
+    // Green Pitch Base
+    const pitch = createBlock(30, 0.2, 40, 0x27ae60);
+    pitch.position.set(0, -0.1, 0);
+    scene.add(pitch);
+
+    // Striped Grass Lines
+    for (let i = -18; i < 20; i += 4) {
+        const stripe = createBlock(30, 0.22, 2, 0x219653);
+        stripe.position.set(0, -0.09, i);
+        scene.add(stripe);
     }
+}
 
-    // Dynamic Wind starting at level 5
-    if (level >= 5) {
-        wind.x = (Math.random() - 0.5) * (level * 0.4);
-    } else {
-        wind.x = 0;
+function buildGoal() {
+    goalFrame = new THREE.Group();
+
+    const postMatColor = 0xffffff;
+    // Left & Right Posts
+    const leftPost = createBlock(0.2, 2.5, 0.2, postMatColor);
+    leftPost.position.set(-3.5, 1.25, 0);
+    const rightPost = createBlock(0.2, 2.5, 0.2, postMatColor);
+    rightPost.position.set(3.5, 1.25, 0);
+
+    // Crossbar
+    const crossbar = createBlock(7.2, 0.2, 0.2, postMatColor);
+    crossbar.position.set(0, 2.5, 0);
+
+    // Pixel Net
+    const net = createBlock(7, 2.4, 0.1, 0xaaaaaa);
+    net.position.set(0, 1.2, -1.2);
+    net.material.transparent = true;
+    net.material.opacity = 0.3;
+
+    goalFrame.add(leftPost, rightPost, crossbar, net);
+    scene.add(goalFrame);
+}
+
+function buildGalleryCrowd() {
+    stadiumGroup = new THREE.Group();
+    
+    // Stadium Stand Structure behind the goal
+    const stand = createBlock(36, 10, 8, 0x1a1a24);
+    stand.position.set(0, 5, -6);
+    stadiumGroup.add(stand);
+
+    // Colorful 3D Voxel Crowd
+    const colors = [0xe74c3c, 0x3498db, 0xf1c40f, 0x2ecc71, 0x9b59b6, 0xffffff];
+    for (let x = -16; x < 16; x += 1.2) {
+        for (let y = 2; y < 9; y += 1.4) {
+            const spectator = createBlock(0.8, 0.8, 0.8, colors[Math.floor(Math.random() * colors.length)]);
+            spectator.position.set(x, y, -2 - (y * 0.4));
+            stadiumGroup.add(spectator);
+        }
     }
+    scene.add(stadiumGroup);
+}
 
-    gameState = 'AIMING';
+function createBall() {
+    const geo = new THREE.DodecahedronGeometry(ball.radius, 1);
+    const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
+    ballMesh = new THREE.Mesh(geo, mat);
+    ballMesh.castShadow = true;
+    scene.add(ballMesh);
+}
+
+function createKeeper() {
+    keeperMesh = new THREE.Group();
+
+    // Body Block
+    const body = createBlock(1.0, 1.4, 0.6, 0x9b59b6);
+    body.position.set(0, 0.7, 0);
+
+    // Head Block
+    const head = createBlock(0.6, 0.6, 0.6, 0xf1c40f);
+    head.position.set(0, 1.7, 0);
+
+    // Gloves
+    const leftGlove = createBlock(0.4, 0.4, 0.4, 0xe74c3c);
+    leftGlove.position.set(-0.7, 0.8, 0.2);
+    const rightGlove = createBlock(0.4, 0.4, 0.4, 0xe74c3c);
+    rightGlove.position.set(0.7, 0.8, 0.2);
+
+    keeperMesh.add(body, head, leftGlove, rightGlove);
+    scene.add(keeperMesh);
 }
 
 function setupWall() {
+    // Clear old wall
+    wallDefenders.forEach(d => scene.remove(d.mesh));
     wallDefenders = [];
+
     const count = Math.min(2 + Math.floor(level / 3), 5);
-    const startX = 240 - (count * 20) / 2;
-    const wallY = 340; // Between ball and goal
+    const startX = -((count - 1) * 0.9) / 2;
 
     for (let i = 0; i < count; i++) {
-        wallDefenders.push({
-            x: startX + i * 22,
-            y: wallY,
-            w: 18,
-            h: 42,
-            offsetY: 0,
-            isJumping: false
-        });
+        const defenderMesh = new THREE.Group();
+        const body = createBlock(0.8, 1.6, 0.5, 0xe67e22);
+        body.position.set(0, 0.8, 0);
+        const head = createBlock(0.5, 0.5, 0.5, 0xf39c12);
+        head.position.set(0, 1.85, 0);
+        defenderMesh.add(body, head);
+
+        const xPos = startX + i * 0.9;
+        const zPos = 6; // Midway between ball & goal
+        defenderMesh.position.set(xPos, 0, zPos);
+
+        scene.add(defenderMesh);
+        wallDefenders.push({ mesh: defenderMesh, x: xPos, z: zPos, isJumping: false, velY: 0 });
     }
 }
 
-// --- INPUT HANDLERS ---
-function getCanvasPos(e) {
-    const rect = canvas.getBoundingClientRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    return {
-        x: (clientX - rect.left) * (canvas.width / rect.width),
-        y: (clientY - rect.top) * (canvas.height / rect.height)
-    };
+// --- LEVEL SETUP ---
+function initLevel() {
+    ball.pos.set(0, 0.4, 12);
+    ball.vel.set(0, 0, 0);
+    ball.spin = 0;
+    ballMesh.position.copy(ball.pos);
+
+    keeper.pos.set(0, 0, 0);
+    keeper.state = 'IDLE';
+    keeperMesh.position.copy(keeper.pos);
+
+    if (level >= 3) {
+        setupWall();
+    } else {
+        wallDefenders.forEach(d => scene.remove(d.mesh));
+        wallDefenders = [];
+    }
+
+    wind = (level >= 5) ? (Math.random() - 0.5) * (level * 0.03) : 0;
+    gameState = 'AIMING';
 }
 
-canvas.addEventListener('mousedown', startDrag);
-canvas.addEventListener('mousemove', drag);
-canvas.addEventListener('mouseup', endDrag);
-
-canvas.addEventListener('touchstart', (e) => { e.preventDefault(); startDrag(e); });
-canvas.addEventListener('touchmove', (e) => { e.preventDefault(); drag(e); });
-canvas.addEventListener('touchend', (e) => { e.preventDefault(); endDrag(e); });
-
-function startDrag(e) {
+// --- SWIPE CONTROLS ---
+function onDragStart(e) {
     if (gameState !== 'AIMING') return;
-    const pos = getCanvasPos(e);
-    // Only start drag near the ball
-    if (Math.hypot(pos.x - ball.x, pos.y - ball.y) < 50) {
-        dragStart = pos;
-        pathPoints = [pos];
-    }
+    isDragging = true;
+    dragPoints = [{ x: e.clientX, y: e.clientY, time: Date.now() }];
 }
 
-function drag(e) {
-    if (!dragStart || gameState !== 'AIMING') return;
-    const pos = getCanvasPos(e);
-    dragCurrent = pos;
-    pathPoints.push(pos);
-    if (pathPoints.length > 10) pathPoints.shift();
+function onDragMove(e) {
+    if (!isDragging || gameState !== 'AIMING') return;
+    dragPoints.push({ x: e.clientX, y: e.clientY, time: Date.now() });
+    if (dragPoints.length > 8) dragPoints.shift();
 }
 
-function endDrag(e) {
-    if (!dragStart || gameState !== 'AIMING') return;
-    
-    if (pathPoints.length >= 2) {
-        const first = pathPoints[0];
-        const last = pathPoints[pathPoints.length - 1];
-        
-        const dx = last.x - first.x;
-        const dy = last.y - first.y;
+function onDragEnd() {
+    if (!isDragging || gameState !== 'AIMING') return;
+    isDragging = false;
 
-        if (dy < -20) { // Must swipe upwards
-            const speed = Math.min(Math.hypot(dx, dy) * 0.12, 18);
-            const angle = Math.atan2(dy, dx);
+    if (dragPoints.length >= 2) {
+        const start = dragPoints[0];
+        const end = dragPoints[dragPoints.length - 1];
 
-            ball.vx = Math.cos(angle) * speed;
-            ball.vy = Math.sin(angle) * speed;
-            ball.vz = Math.min(Math.abs(dy) * 0.08, 10); // Elevation physics
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
 
-            // Calculate spin based on path curvature
-            let mid = pathPoints[Math.floor(pathPoints.length / 2)];
-            let curve = (mid.x - (first.x + last.x) / 2);
-            ball.spin = curve * 0.15;
+        if (dy < -30) { // Forward swipe
+            const forwardSpeed = Math.min(Math.abs(dy) * 0.08, 22);
+            const sideSpeed = dx * 0.025;
+            const upwardSpeed = Math.min(Math.abs(dy) * 0.04, 8);
 
-            // Trigger Goalkeeper AI Prediction
+            // Curve calculation from swipe path trajectory
+            const mid = dragPoints[Math.floor(dragPoints.length / 2)];
+            const curve = (mid.x - (start.x + end.x) / 2);
+
+            ball.vel.set(sideSpeed, upwardSpeed, -forwardSpeed);
+            ball.spin = -curve * 0.005;
+
+            // Trigger AI & Wall Jump
             triggerKeeperAI();
-
-            // Wall Jump trigger
             wallDefenders.forEach(d => {
-                if (Math.random() > 0.3) {
-                    d.isJumping = true;
-                }
+                if (Math.random() > 0.3) d.isJumping = true;
             });
 
             gameState = 'IN_FLIGHT';
         }
     }
-
-    dragStart = null;
-    dragCurrent = null;
 }
 
-// --- AI & PHYSICS LOGIC ---
+// --- AI & PHYSICS LOOP ---
 function triggerKeeperAI() {
-    // Goalkeeper difficulty scales with level
-    const reactionDelay = Math.max(100, 500 - level * 30);
-    const speed = 3 + Math.min(level * 0.5, 7);
-
+    const reactionDelay = Math.max(80, 450 - level * 30);
     setTimeout(() => {
-        // Predict ball position at goal line
-        let predictedX = ball.x + (ball.vx * 25) + (ball.spin * 10);
-        // Add random error on early levels
-        if (level < 5) {
-            predictedX += (Math.random() - 0.5) * 80;
-        }
+        // Predict ball trajectory at goal line (Z = 0)
+        let predictedX = ball.pos.x + (ball.vel.x * 0.8) + (ball.spin * 12);
+        if (level < 5) predictedX += (Math.random() - 0.5) * 3;
 
-        // Keep target inside or near goal frame
-        keeper.targetX = Math.max(goal.x - 10, Math.min(goal.x + goal.w + 10, predictedX));
-        keeper.vx = (keeper.targetX > keeper.x ? 1 : -1) * speed;
+        keeper.targetX = THREE.MathUtils.clamp(predictedX, -3.2, 3.2);
         keeper.state = 'DIVING';
     }, reactionDelay);
 }
 
-function updatePhysics() {
+function updatePhysics(delta) {
     if (gameState !== 'IN_FLIGHT') return;
 
-    // Ball movement
-    ball.x += ball.vx + wind.x;
-    ball.y += ball.vy;
-    ball.z += ball.vz;
+    // Apply Ball Forces (Vel, Gravity, Curve/Spin, Wind)
+    ball.vel.x += (ball.spin + wind) * delta * 60;
+    ball.vel.y -= 9.8 * delta; // Gravity
+    ball.pos.addScaledVector(ball.vel, delta);
 
-    // Apply Spin & Gravity
-    ball.vx += ball.spin * 0.08;
-    ball.vz -= 0.38; // Gravity
-
-    if (ball.z < 0) {
-        ball.z = 0;
-        ball.vx *= 0.6;
-        ball.vy *= 0.6;
+    // Floor Bounce
+    if (ball.pos.y <= ball.radius) {
+        ball.pos.y = ball.radius;
+        ball.vel.y *= -0.5;
+        ball.vel.x *= 0.7;
+        ball.vel.z *= 0.7;
     }
 
-    // Goalkeeper movement
+    ballMesh.position.copy(ball.pos);
+    ballMesh.rotation.x += ball.vel.z * delta;
+
+    // Goalkeeper AI Movement
     if (keeper.state === 'DIVING') {
-        if (Math.abs(keeper.x - keeper.targetX) > 4) {
-            keeper.x += keeper.vx;
+        const speed = (5 + level * 0.5) * delta;
+        if (Math.abs(keeper.pos.x - keeper.targetX) > 0.1) {
+            keeper.pos.x += Math.sign(keeper.targetX - keeper.pos.x) * speed;
         }
+        keeperMesh.position.copy(keeper.pos);
     }
 
-    // Wall Defender Jump movement
+    // Wall Defender Jump Movement
     wallDefenders.forEach(d => {
         if (d.isJumping) {
-            d.offsetY -= 2;
-            if (d.offsetY < -25) d.isJumping = false;
-        } else if (d.offsetY < 0) {
-            d.offsetY += 2;
+            d.mesh.position.y += 3 * delta;
+            if (d.mesh.position.y >= 1.2) d.isJumping = false;
+        } else if (d.mesh.position.y > 0) {
+            d.mesh.position.y -= 3 * delta;
         }
     });
 
     // --- COLLISIONS ---
-
-    // 1. Wall Collision
+    // 1. Wall Hit
     wallDefenders.forEach(d => {
-        if (ball.y <= d.y + 10 && ball.y >= d.y - 10) {
-            if (ball.x >= d.x && ball.x <= d.x + d.w) {
-                if (ball.z < d.h + d.offsetY) {
-                    ball.vy = 2; // Bounce back
-                    ball.vx *= -0.5;
-                    triggerResult("BLOCKED BY WALL!");
-                }
+        if (Math.abs(ball.pos.z - d.z) < 0.4 && Math.abs(ball.pos.x - d.mesh.position.x) < 0.5) {
+            if (ball.pos.y < 1.8 + d.mesh.position.y) {
+                ball.vel.z *= -0.3;
+                triggerResult("BLOCKED BY WALL!");
             }
         }
     });
 
-    // 2. Goalkeeper Save Collision
-    const kRect = {
-        x: keeper.x - keeper.w / 2,
-        y: keeper.y - keeper.h,
-        w: keeper.w,
-        h: keeper.h
-    };
-
-    if (ball.y <= keeper.y && ball.y >= keeper.y - 20) {
-        if (ball.x >= kRect.x && ball.x <= kRect.x + kRect.w) {
-            if (ball.z <= kRect.h) {
-                ball.vy = 3;
-                ball.vx = (Math.random() - 0.5) * 6;
-                triggerResult("SAVED!");
-            }
+    // 2. Goalkeeper Save Hit
+    if (Math.abs(ball.pos.z - keeper.pos.z) < 0.5 && Math.abs(ball.pos.x - keeper.pos.x) < 0.9) {
+        if (ball.pos.y < 2.2) {
+            ball.vel.z *= -0.4;
+            ball.vel.x += (Math.random() - 0.5) * 5;
+            triggerResult("SAVED!");
         }
     }
 
-    // 3. Goal & Miss Detection
-    if (ball.y <= goal.y + 10) {
-        // Goal frame checks
-        const insideX = ball.x > goal.x + 8 && ball.x < goal.x + goal.w - 8;
-        const insideZ = ball.z < goal.h - 5;
+    // 3. Goal / Out Collision
+    if (ball.pos.z <= 0) {
+        const inGoalX = Math.abs(ball.pos.x) < 3.4;
+        const inGoalY = ball.pos.y < 2.4 && ball.pos.y > 0.2;
 
-        // Check Crossbar / Post Hits
-        const hitPost = (Math.abs(ball.x - goal.x) < 8 || Math.abs(ball.x - (goal.x + goal.w)) < 8) && insideZ;
-        const hitBar = insideX && Math.abs(ball.z - goal.h) < 8;
-
-        if (hitPost || hitBar) {
-            ball.vy = 4;
-            ball.vz = -2;
-            triggerResult("WOODWORK!");
-            return;
-        }
-
-        if (insideX && insideZ) {
-            // Check Upper 90 corner goal
-            const isCorner = (ball.x < goal.x + 40 || ball.x > goal.x + goal.w - 40) && ball.z > goal.h - 30;
+        if (inGoalX && inGoalY) {
+            const isCorner = Math.abs(ball.pos.x) > 2.2 && ball.pos.y > 1.6;
             const pts = isCorner ? 250 : 100;
             score += pts;
             level++;
@@ -428,8 +501,8 @@ function updateUI() {
     document.getElementById('lives-val').innerText = "❤️".repeat(Math.max(0, lives));
 }
 
-// Restart Game
-canvas.addEventListener('click', () => {
+// Restart Handler
+window.addEventListener('click', () => {
     if (gameState === 'GAME_OVER') {
         score = 0;
         level = 1;
@@ -440,166 +513,32 @@ canvas.addEventListener('click', () => {
     }
 });
 
-// --- RENDER FUNCTIONS (PIXEL ART STYLE) ---
-function drawPixelRect(x, y, w, h, color) {
-    ctx.fillStyle = color;
-    ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+function onWindowResize() {
+    const container = document.getElementById('canvas-container');
+    camera.aspect = container.clientWidth / container.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(container.clientWidth, container.clientHeight);
 }
 
-function drawStadium() {
-    // Sky
-    drawPixelRect(0, 0, canvas.width, 120, '#111d2b');
+// --- RENDER & ANIMATION LOOP ---
+let clock = new THREE.Clock();
 
-    // Cheering Gallery / Pixelated Crowd
-    for (let x = 0; x < canvas.width; x += 8) {
-        for (let y = 30; y < 110; y += 8) {
-            const colors = ['#e74c3c', '#3498db', '#f1c40f', '#2ecc71', '#9b59b6', '#ffffff'];
-            // Animated crowd color flickering
-            const randomColor = colors[(Math.floor(x + y + Date.now() * 0.005) % colors.length)];
-            drawPixelRect(x, y, 6, 6, randomColor);
-        }
+function animate() {
+    requestAnimationFrame(animate);
+
+    const delta = clock.getDelta();
+    updatePhysics(delta);
+
+    // Subtle Gallery Crowd Bounce Animation
+    if (stadiumGroup) {
+        stadiumGroup.position.y = Math.sin(Date.now() * 0.005) * 0.1;
     }
 
-    // Pitch Grass Patterns
-    drawPixelRect(0, 110, canvas.width, canvas.height - 110, '#27ae60');
-    for (let y = 110; y < canvas.height; y += 40) {
-        if ((y / 40) % 2 === 0) {
-            drawPixelRect(0, y, canvas.width, 20, '#219653');
-        }
-    }
-
-    // Penalty Box Lines
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(goal.x - 40, goal.y, goal.w + 80, 260);
-
-    // Goal Net Backing
-    drawPixelRect(goal.x, goal.y, goal.w, goal.h, '#1e272c');
-    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-    ctx.lineWidth = 1;
-    for (let x = goal.x; x <= goal.x + goal.w; x += 10) {
-        ctx.beginPath();
-        ctx.moveTo(x, goal.y);
-        ctx.lineTo(x, goal.y + goal.h);
-        ctx.stroke();
-    }
-    for (let y = goal.y; y <= goal.y + goal.h; y += 10) {
-        ctx.beginPath();
-        ctx.moveTo(goal.x, y);
-        ctx.lineTo(goal.x + goal.w, y);
-        ctx.stroke();
-    }
-
-    // Goal Frame (Posts & Crossbar)
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 6;
-    ctx.strokeRect(goal.x, goal.y, goal.w, goal.h);
+    renderer.render(scene, camera);
 }
 
-function drawWall() {
-    wallDefenders.forEach(d => {
-        const py = d.y + d.offsetY;
-        // Jersey
-        drawPixelRect(d.x, py, d.w, d.h - 14, '#e67e22');
-        // Shorts & Legs
-        drawPixelRect(d.x, py + d.h - 14, d.w, 8, '#2c3e50');
-        drawPixelRect(d.x + 2, py + d.h - 6, 4, 6, '#f1c40f');
-        drawPixelRect(d.x + d.w - 6, py + d.h - 6, 4, 6, '#f1c40f');
-        // Head
-        drawPixelRect(d.x + 3, py - 10, 12, 10, '#f39c12');
-    });
-}
-
-function drawKeeper() {
-    const kx = keeper.x - keeper.w / 2;
-    const ky = keeper.y - keeper.h;
-
-    // Shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    ctx.beginPath();
-    ctx.ellipse(keeper.x, keeper.y, 20, 6, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Body (Pixel Goalkeeper)
-    drawPixelRect(kx, ky, keeper.w, keeper.h - 16, '#9b59b6'); // Purple Jersey
-    drawPixelRect(kx + 4, ky + keeper.h - 16, keeper.w - 8, 10, '#34495e'); // Shorts
-    drawPixelRect(kx + 4, ky + keeper.h - 6, 8, 6, '#f1c40f'); // Socks
-    drawPixelRect(kx + keeper.w - 12, ky + keeper.h - 6, 8, 6, '#f1c40f');
-
-    // Head & Gloves
-    drawPixelRect(kx + 10, ky - 12, 16, 12, '#f1c40f'); // Head
-    drawPixelRect(kx - 6, ky + 8, 8, 8, '#e74c3c'); // Left Glove
-    drawPixelRect(kx + keeper.w - 2, ky + 8, 8, 8, '#e74c3c'); // Right Glove
-}
-
-function drawBall() {
-    // Ball Shadow (Scales with altitude z)
-    const shadowScale = Math.max(0.3, 1 - ball.z * 0.015);
-    ctx.fillStyle = 'rgba(0,0,0,0.35)';
-    ctx.beginPath();
-    ctx.ellipse(ball.x, ball.y, ball.radius * shadowScale, (ball.radius / 2) * shadowScale, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Render Ball elevated by z-axis
-    const renderY = ball.y - ball.z;
-    
-    // Pixelated Ball Body
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.arc(ball.x, renderY, ball.radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    // Ball Pattern / Rotation simulation
-    drawPixelRect(ball.x - 3, renderY - 3, 6, 6, '#000000');
-}
-
-function drawAimTrajectory() {
-    if (dragStart && dragCurrent) {
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
-        ctx.lineWidth = 3;
-        ctx.setLineDash([6, 6]);
-        ctx.beginPath();
-        ctx.moveTo(pathPoints[0].x, pathPoints[0].y);
-        for (let p of pathPoints) {
-            ctx.lineTo(p.x, p.y);
-        }
-        ctx.stroke();
-        ctx.setLineDash([]);
-    }
-}
-
-function drawWindIndicator() {
-    if (Math.abs(wind.x) > 0.1) {
-        ctx.fillStyle = '#fff';
-        ctx.font = '12px Courier New';
-        const dir = wind.x > 0 ? '--->' : '<---';
-        ctx.fillText(`WIND: ${dir} ${Math.abs(wind.x).toFixed(1)}`, 20, 50);
-    }
-}
-
-// --- MAIN GAME LOOP ---
-function gameLoop() {
-    // Update
-    updatePhysics();
-
-    // Render
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    drawStadium();
-    drawWall();
-    drawKeeper();
-    drawBall();
-    drawAimTrajectory();
-    drawWindIndicator();
-
-    requestAnimationFrame(gameLoop);
-}
-
-// Run
-initLevel();
-gameLoop();
+// Start
+init3D();
 </script>
 </body>
 </html>
